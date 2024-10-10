@@ -23,7 +23,7 @@ You know that feeling when you push a commit and realize you accidentally added 
 
 1. **Grab the Code:**
    ```bash
-   git clone https://github.com/your_username/commit-watcher.git
+   git clone https://github.com/mrwoodlog/commit-watcher.git
    cd commit-watcher
    ```
 
