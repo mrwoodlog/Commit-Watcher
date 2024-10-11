@@ -46,31 +46,29 @@ You’ll need a GitHub token to access your repos. Here’s how to get one:
 
 ### **4. Run the Script!**
 
-Now you’re ready to roll. Use this command to monitor your repo:
+When you run the script for the first time, it will ask for your GitHub API token and (optionally) your Discord webhook URL. These values will be saved locally in a configuration file (`config.json`), so you only need to enter them **once**.
+
+After the first run, just use the following command to monitor your repo without providing the token again:
 
 ```bash
-python commit_watcher.py owner_name repo_name --branch branch_name --token YOUR_GITHUB_TOKEN
+python commit_watcher.py owner_name repo_name --branch branch_name
 ```
 
 ### **Example**:  
-If you want to watch the `main` branch of `my-repo` owned by `my-user`, you’d do:
+If you want to watch the `main` branch of the `my-repo` repository owned by `my-user`, you’d do:
 
 ```bash
-python commit_watcher.py my-user my-repo --branch main --token ghp_1234abcd5678efghijklmnopqrstuvwx
+python commit_watcher.py my-user my-repo --branch main
 ```
 
-### **5. Want to Keep Things Secure?**
-Instead of typing the token every time, store it in an environment variable:
+You can test this project on the `test-commit-watcher` repo:
 
-1. Set the variable:
-   ```bash
-   export GITHUB_TOKEN=YOUR_GITHUB_TOKEN
-   ```
+```bash
+python commit_watcher.py mrwoodlog test-commit-checker --branch main
+```
 
-2. Run the script like this:
-   ```bash
-   python commit_watcher.py owner_name repo_name --branch branch_name --token $GITHUB_TOKEN
-   ```
+### **5. Custom Configuration**  
+If you need to update the token or webhook URL, you can manually edit the `config.json` file located in the same directory as the script. Just open it in any text editor and update the values.
 
 ## **Customize It!**  
 You can fine-tune the rules for patterns or sensitive files by editing the `DEFAULT_PATTERNS` and `SENSITIVE_FILES` lists in `commit_watcher.py`.
@@ -97,6 +95,3 @@ SENSITIVE_FILES = [
 
 ## **Want to Contribute?**
 Got ideas? Found a bug? Open an issue or submit a pull request! Contributions, feedback, and feature requests are all welcome. 💡
-
-## **License**
-This project is under the MIT License. Do whatever you want with it!
