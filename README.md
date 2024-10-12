@@ -1,7 +1,7 @@
-
 # **Commit Watcher**
 
-Welcome to **Commit Watcher**! 🎉  
+Welcome to **Commit Watcher**! 🎉 
+
 This is a lightweight tool that keeps an eye on your GitHub repository to make sure no one’s accidentally leaking secrets or making suspicious changes. It scans for risky patterns like sensitive keywords (`password`, `token`), sketchy file types (`.env`, `.pem`), or code changes that look... a bit off.
 
 ### Why should you use it?  
@@ -11,6 +11,7 @@ You know that feeling when you push a commit and realize you accidentally added 
 - **Pattern Detection:** Spots keywords like `password` or `api_key` in commit messages or diffs.
 - **Sensitive File Monitoring:** Alerts you if files like `.env` or `.pem` are added.
 - **Code Smell Detection:** Flags big, unusual code changes (e.g., hundreds of lines added or deleted).
+- **Background Monitoring:** Automatically monitors your repository for new commits at regular intervals.
 - **Customizable:** Tweak the rules to your needs!
 
 ## **Getting Started**
@@ -18,7 +19,7 @@ You know that feeling when you push a commit and realize you accidentally added 
 ### **1. What You Need**
 - Python 3.7 or above.
 - The `requests` and `termcolor` libraries.
-  
+
 ### **2. Setting It Up**
 
 1. **Grab the Code:**
@@ -48,7 +49,9 @@ You’ll need a GitHub token to access your repos. Here’s how to get one:
 
 When you run the script for the first time, it will ask for your GitHub API token and (optionally) your Discord webhook URL. These values will be saved locally in a configuration file (`config.json`), so you only need to enter them **once**.
 
-After the first run, just use the following command to monitor your repo without providing the token again:
+It will also prompt you to enter the interval (in seconds) for checking new commits when running in background mode.
+
+After the first run, just use the following command to monitor your repo without providing the token or URL again:
 
 ```bash
 python commit_watcher.py owner_name repo_name --branch branch_name
@@ -61,14 +64,17 @@ If you want to watch the `main` branch of the `my-repo` repository owned by `my-
 python commit_watcher.py my-user my-repo --branch main
 ```
 
-You can test this project on the `test-commit-watcher` repo:
+### **5. Running in Background Mode**  
+To enable automatic background monitoring of new commits at a specified interval, use the `--background` flag:
 
 ```bash
-python commit_watcher.py mrwoodlog test-commit-checker --branch main
+python commit_watcher.py owner_name repo_name --branch branch_name --background
 ```
 
-### **5. Custom Configuration**  
-If you need to update the token or webhook URL, you can manually edit the `config.json` file located in the same directory as the script. Just open it in any text editor and update the values.
+You can also set a custom interval for background checks (e.g., every 300 seconds or 5 minutes). Recommended time with a github token is 60 seconds or every minute (github has a rate limit of 5000 with a token and 60 without one <u>per day</u>).
+
+### **6. Custom Configuration**  
+If you need to update the token, webhook URL, or interval, you can manually edit the `config.json` file located in the same directory as the script. Just open it in any text editor and update the values.
 
 ## **Customize It!**  
 You can fine-tune the rules for patterns or sensitive files by editing the `DEFAULT_PATTERNS` and `SENSITIVE_FILES` lists in `commit_watcher.py`.
