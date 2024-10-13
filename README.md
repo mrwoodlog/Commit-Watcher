@@ -49,7 +49,10 @@ You’ll need a GitHub token to access your repos. Here’s how to get one:
 
 When you run the script for the first time, it will ask for your GitHub API token and (optionally) your Discord webhook URL. These values will be saved locally in a configuration file (`config.json`), so you only need to enter them **once**.
 
-It will also prompt you to enter the interval (in seconds) for checking new commits when running in background mode.
+It will also prompt you to enter:
+- the interval (in seconds) for checking new commits when running in background mode 
+- a maximum commit size (in lines)
+- a list of restricted files that will be flagged (e.g. .dll, .exe)
 
 After the first run, just use the following command to monitor your repo without providing the token or URL again:
 
