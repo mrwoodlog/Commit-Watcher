@@ -30,7 +30,11 @@ SEVERITY_COLORS = {
 }
 
 GITHUB_API_URL = "https://api.github.com/repos/{owner}/{repo}/commits"
+GITHUB_BRANCH_API_URL = "https://api.github.com/repos/{owner}/{repo}/branches"
+GITHUB_COMPARE_URL = "https://api.github.com/repos/{owner}/{repo}/compare/{base}...{head}"
 CONFIG_FILE = "config.json"
+
+STALE_BRANCH_DAYS = 30
 
 def color_message(message, severity):
     print(colored(message, SEVERITY_COLORS.get(severity, 'white')))
@@ -40,8 +44,7 @@ def get_extension(file_name):
         return file_name
     else:
         file_path = Path(file_name)
-        file_extension = file_path.suffix
-        return file_extension  
+        return file_path.suffix  
 
 def get_commit_details(url, token=None):
     headers = {'Authorization': f'token {token}'} if token else {}
@@ -61,6 +64,24 @@ def get_recent_commits(owner, repo, branch='main', token=None):
         return []
     return response.json()
 
+def get_branches(owner, repo, token=None):
+    headers = {'Authorization': f'token {token}'} if token else {}
+    url = GITHUB_BRANCH_API_URL.format(owner=owner, repo=repo)
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        color_message(f"Failed to fetch branches: {response.status_code}", 'critical')
+        return []
+    return response.json()
+
+def compare_branches(owner, repo, base, head, token=None):
+    headers = {'Authorization': f'token {token}'} if token else {}
+    url = GITHUB_COMPARE_URL.format(owner=owner, repo=repo, base=base, head=head)
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        color_message(f"Failed to compare branches: {response.status_code}", 'critical')
+        return None
+    return response.json()
+
 def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_FILES, token=None, max_commit_size=None, restricted_file_types=None):
     commit_message = commit['commit']['message']
     commit_url = commit['html_url']
@@ -73,11 +94,13 @@ def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_
     files = commit_details.get('files', [])
     reasons = []
 
+    # Check for commit size
     total_lines_changed = sum(file['changes'] for file in files)
     if max_commit_size and total_lines_changed > max_commit_size:
         reasons.append(f"Commit exceeds size limit with {total_lines_changed} lines changed (limit: {max_commit_size})")
         color_message(f"Commit size exceeds the maximum allowed limit: {total_lines_changed} lines (limit: {max_commit_size})", 'critical')
 
+    # Check for restricted file types
     if restricted_file_types:
         for file in files:
             filename = file['filename']
@@ -86,11 +109,13 @@ def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_
                 reasons.append(f"Restricted file type '{file_ext}' found in '{filename}'")
                 color_message(f"Restricted file type found: {filename}", 'critical')
 
+    # Check for risky patterns
     for pattern in patterns:
         if re.search(pattern, commit_message, re.IGNORECASE):
             reasons.append(f"Pattern '{pattern}' found in commit message")
             color_message(f"Pattern '{pattern}' found in commit message: {commit_message} ({commit_url})", 'warning')
 
+    # Check for sensitive files
     for file in files:
         filename = file['filename']
         if any(filename.endswith(ext) for ext in sensitive_files):
@@ -149,44 +174,80 @@ def monitor_repository(owner, repo, branch='main', patterns=DEFAULT_PATTERNS, to
         color_message("No commits found or failed to fetch.", 'info')
         return
 
-    for commit in commits:
-        if analyze_commit(commit, patterns, token=token, max_commit_size=max_commit_size, restricted_file_types=restricted_file_types):
-            color_message(f"Risky commit detected: {commit['commit']['message']} ({commit['html_url']})", 'critical')
+def check_branches(owner, repo, token, stale_days, webhook_url=None):
+    branches = get_branches(owner, repo, token)
 
-def monitor_in_background(owner, repo, branch='main', patterns=DEFAULT_PATTERNS, token=None, interval=300, max_commit_size=None, restricted_file_types=None):
+    reasons = []
+    if not branches:
+        return
+
+    for branch in branches:
+        branch_name = branch['name']
+        latest_commit_sha = branch['commit']['sha']
+        commit_details = get_commit_details(branch['commit']['url'], token)
+
+        if commit_details:
+            commit_date = commit_details['commit']['author']['date']
+            commit_timestamp = time.strptime(commit_date, "%Y-%m-%dT%H:%M:%SZ")
+            commit_age_in_days = (time.time() - time.mktime(commit_timestamp)) / (60 * 60 * 24)
+
+            if commit_age_in_days > stale_days:
+                message = f"**Branch** '[{branch_name}](https://github.com/{owner}/{repo}/tree/{branch_name})' is stale (last commit {int(commit_age_in_days)} days ago)."
+                color_message(message, 'warning')
+                if webhook_url:
+                    reasons.append(message)
+
+        if branch['name'] != 'main':
+            comparison = compare_branches(owner, repo, 'main', branch['name'], token)
+            if comparison and comparison.get('behind_by', 0) > branch_behind_by: 
+                message = f"**Branch** '{branch_name}' is behind main by {comparison['behind_by']} commits. Consider merging."
+                color_message(message, 'critical')
+                if webhook_url:
+                    reasons.append(message)
+
+    if webhook_url and len(reasons) > 0:
+        send_branch_notification(webhook_url, repo, reasons)
+
+def send_branch_notification(webhook_url, branch_name, reasons):
+    detailed_reasons = "\n".join(f"- {reason}" for reason in reasons)
+    data = {
+        "content": f"⚠️ **Branch Alert: {branch_name}** ⚠️\n{detailed_reasons}"
+    }
+    try:
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(webhook_url, json=data, headers=headers)
+        if response.status_code in [204, 200]:
+            color_message(f"Notification for branch '{branch_name}' sent successfully", "info")
+        else:
+            color_message(f"Failed to send notification: {response.status_code} - {response.text}", 'warning')
+    except Exception as e:
+        color_message(f"Error sending notification: {e}", "critical")
+
+def monitor_in_background(owner, repo, branch='main', token=None, interval=300, stale_branch_check_interval=86400, stale_days=30, max_commit_size=None, restricted_file_types=None, webhook_url=None):
     color_message(f"Starting background monitoring for repository: {owner}/{repo} on branch {branch}", 'info')
     last_commit_sha = None
+    last_stale_check = time.time()
 
     while True:
         color_message("Checking for new commits...", 'info')
-        remaining_requests = check_rate_limit(token)
-        if remaining_requests is not None and remaining_requests < 5:
-            color_message("API rate limit is low. Waiting until reset.", 'critical')
-            time.sleep(interval * 2)
-            continue
-
         commits = get_recent_commits(owner, repo, branch, token)
-        if not commits:
-            color_message("No commits found or failed to fetch.", 'info')
-            time.sleep(interval)
-            continue
 
-        new_commits = []
-        for commit in commits:
-            if commit['sha'] == last_commit_sha:
-                break
-            new_commits.append(commit)
-
-        if new_commits:
-            color_message(f"Found {len(new_commits)} new commit(s) to analyze.", 'info')
+        if commits:
+            new_commits = [commit for commit in commits if commit['sha'] != last_commit_sha]
             for commit in reversed(new_commits):
-                analyze_commit(commit, patterns, token=token, max_commit_size=max_commit_size, restricted_file_types=restricted_file_types)
-            last_commit_sha = new_commits[0]['sha']
+                analyze_commit(commit, token=token, max_commit_size=max_commit_size, restricted_file_types=restricted_file_types)
+                last_commit_sha = commit['sha']
+            color_message(f"Found {len(new_commits)} new commit(s)", 'info')
+
+        current_time = time.time()
+        if current_time - last_stale_check > stale_branch_check_interval:
+            check_branches(owner, repo, token, stale_days, webhook_url)
+            last_stale_check = current_time
 
         time.sleep(interval)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Monitor a GitHub repository for risky commits.")
+    parser = argparse.ArgumentParser(description="Monitor a GitHub repository for risky commits and stale branches.")
     parser.add_argument("owner", help="Owner of the GitHub repository")
     parser.add_argument("repo", help="Name of the GitHub repository")
     parser.add_argument("--branch", default="main", help="Branch to monitor (default: main)")
@@ -217,10 +278,19 @@ if __name__ == "__main__":
     restricted_file_types = restricted_file_types if restricted_file_types else []
     config["RESTRICTED_FILE_TYPES"] = restricted_file_types
 
+    stale_days = config.get("STALE_DAYS") or input("Enter the number of days to consider a branch stale: ").strip()
+    config["STALE_DAYS"] = int(stale_days)
+
+    stale_branch_check_interval = config.get("STALE_BRANCH_CHECK_INTERVAL") or input("Enter the interval (in seconds) to check for stale branches: ").strip()
+    config["STALE_BRANCH_CHECK_INTERVAL"] = int(stale_branch_check_interval)
+
+    branch_behind_by = config.get("BRANCH_BEHIND_BY") or input("Enter the number of commits to check for diverging branches: ").strip()
+    config["BRANCH_BEHIND_BY"] = int(branch_behind_by)
+
     with open(CONFIG_FILE, "w") as file:
         json.dump(config, file)
 
     if args.background:
-        monitor_in_background(args.owner, args.repo, args.branch, token=token, interval=int(interval), max_commit_size=int(max_commit_size), restricted_file_types=restricted_file_types)
+        monitor_in_background(args.owner, args.repo, args.branch, token=token, interval=int(interval), stale_branch_check_interval=int(stale_branch_check_interval), stale_days=int(stale_days), max_commit_size=int(max_commit_size), restricted_file_types=restricted_file_types, webhook_url=webhook_url)
     else:
         monitor_repository(args.owner, args.repo, args.branch, token=token, max_commit_size=int(max_commit_size), restricted_file_types=restricted_file_types)

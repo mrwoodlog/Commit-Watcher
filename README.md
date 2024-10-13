@@ -53,6 +53,9 @@ It will also prompt you to enter:
 - the interval (in seconds) for checking new commits when running in background mode 
 - a maximum commit size (in lines)
 - a list of restricted files that will be flagged (e.g. .dll, .exe)
+- number of days without commits after which a branch is considered stale
+- number of seconds to check for stale branches
+- number of commits that define a diverging branch
 
 After the first run, just use the following command to monitor your repo without providing the token or URL again:
 
