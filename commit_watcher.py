@@ -2,6 +2,7 @@ import requests
 import argparse
 import re
 from termcolor import colored
+from pathlib import Path
 import os
 import json
 import time
@@ -34,6 +35,14 @@ CONFIG_FILE = "config.json"
 def color_message(message, severity):
     print(colored(message, SEVERITY_COLORS.get(severity, 'white')))
 
+def get_extension(file_name):
+    if file_name.startswith(".") and len(file_name) > 1:
+        return file_name
+    else:
+        file_path = Path(file_name)
+        file_extension = file_path.suffix
+        return file_extension  
+
 def get_commit_details(url, token=None):
     headers = {'Authorization': f'token {token}'} if token else {}
     response = requests.get(url, headers=headers)
@@ -52,7 +61,7 @@ def get_recent_commits(owner, repo, branch='main', token=None):
         return []
     return response.json()
 
-def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_FILES, token=None):
+def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_FILES, token=None, max_commit_size=None, restricted_file_types=None):
     commit_message = commit['commit']['message']
     commit_url = commit['html_url']
     color_message(f"Analyzing commit: {commit_message} ({commit_url})", 'info')
@@ -64,6 +73,19 @@ def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_
     files = commit_details.get('files', [])
     reasons = []
 
+    total_lines_changed = sum(file['changes'] for file in files)
+    if max_commit_size and total_lines_changed > max_commit_size:
+        reasons.append(f"Commit exceeds size limit with {total_lines_changed} lines changed (limit: {max_commit_size})")
+        color_message(f"Commit size exceeds the maximum allowed limit: {total_lines_changed} lines (limit: {max_commit_size})", 'critical')
+
+    if restricted_file_types:
+        for file in files:
+            filename = file['filename']
+            file_ext = get_extension(filename)
+            if file_ext in restricted_file_types:
+                reasons.append(f"Restricted file type '{file_ext}' found in '{filename}'")
+                color_message(f"Restricted file type found: {filename}", 'critical')
+
     for pattern in patterns:
         if re.search(pattern, commit_message, re.IGNORECASE):
             reasons.append(f"Pattern '{pattern}' found in commit message")
@@ -73,7 +95,7 @@ def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_
         filename = file['filename']
         if any(filename.endswith(ext) for ext in sensitive_files):
             reasons.append(f"Sensitive file '{filename}' detected")
-            color_message(f"Sensitive file detected: {filename} in commit {commit_url})", 'critical')
+            color_message(f"Sensitive file detected: {filename} in commit {commit_url}", 'critical')
 
         patch = file.get('patch', '')
         for pattern in patterns:
@@ -84,6 +106,7 @@ def analyze_commit(commit, patterns=DEFAULT_PATTERNS, sensitive_files=SENSITIVE_
     if reasons:
         send_notification(commit, reasons)
         return True
+
     return False
 
 def send_notification(commit, reasons):
@@ -118,8 +141,19 @@ def check_rate_limit(token=None):
     else:
         color_message(f"Failed to check rate limit: {response.status_code}", 'critical')
         return None
+    
+def monitor_repository(owner, repo, branch='main', patterns=DEFAULT_PATTERNS, token=None, max_commit_size=None, restricted_file_types=None):
+    color_message(f"Monitoring repository: {owner}/{repo} on branch {branch}", 'info')
+    commits = get_recent_commits(owner, repo, branch, token)
+    if not commits:
+        color_message("No commits found or failed to fetch.", 'info')
+        return
 
-def monitor_in_background(owner, repo, branch='main', patterns=DEFAULT_PATTERNS, token=None, interval=300):
+    for commit in commits:
+        if analyze_commit(commit, patterns, token=token, max_commit_size=max_commit_size, restricted_file_types=restricted_file_types):
+            color_message(f"Risky commit detected: {commit['commit']['message']} ({commit['html_url']})", 'critical')
+
+def monitor_in_background(owner, repo, branch='main', patterns=DEFAULT_PATTERNS, token=None, interval=300, max_commit_size=None, restricted_file_types=None):
     color_message(f"Starting background monitoring for repository: {owner}/{repo} on branch {branch}", 'info')
     last_commit_sha = None
 
@@ -146,7 +180,7 @@ def monitor_in_background(owner, repo, branch='main', patterns=DEFAULT_PATTERNS,
         if new_commits:
             color_message(f"Found {len(new_commits)} new commit(s) to analyze.", 'info')
             for commit in reversed(new_commits):
-                analyze_commit(commit, patterns, token=token)
+                analyze_commit(commit, patterns, token=token, max_commit_size=max_commit_size, restricted_file_types=restricted_file_types)
             last_commit_sha = new_commits[0]['sha']
 
         time.sleep(interval)
@@ -176,8 +210,17 @@ if __name__ == "__main__":
     interval = config.get("INTERVAL") or input("Enter the interval (in seconds) for background checks: ").strip()
     config["INTERVAL"] = int(interval)
 
+    max_commit_size = config.get("MAX_COMMIT_SIZE") or input("Enter the maximum allowed commit size (in lines): ").strip()
+    config["MAX_COMMIT_SIZE"] = int(max_commit_size)
+
+    restricted_file_types = config.get("RESTRICTED_FILE_TYPES") or input("Enter restricted file types (comma-separated, e.g., .exe,.dll): ").strip()
+    restricted_file_types = restricted_file_types if restricted_file_types else []
+    config["RESTRICTED_FILE_TYPES"] = restricted_file_types
+
     with open(CONFIG_FILE, "w") as file:
         json.dump(config, file)
 
     if args.background:
-        monitor_in_background(args.owner, args.repo, args.branch, token=token, interval=int(interval))
+        monitor_in_background(args.owner, args.repo, args.branch, token=token, interval=int(interval), max_commit_size=int(max_commit_size), restricted_file_types=restricted_file_types)
+    else:
+        monitor_repository(args.owner, args.repo, args.branch, token=token, max_commit_size=int(max_commit_size), restricted_file_types=restricted_file_types)
